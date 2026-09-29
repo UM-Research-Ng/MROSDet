@@ -1,0 +1,23 @@
+path: ../data/umod_sample
+nc: 9
+names:
+  0: cage
+  1: frame
+  2: hook
+  3: anchor
+  4: tire
+  5: rov
+  6: plastic bucket
+  7: fish
+  8: oil drums
+modalities:
+  rgb:
+    train: RGB/train/images
+    val: RGB/val/images
+    test: RGB/test/images
+    channels: 3
+  sonar:
+    train: Sonar/train/images
+    val: Sonar/val/images
+    test: Sonar/test/images
+    channels: 3

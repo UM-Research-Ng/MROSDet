@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mrosdet"
+version = "0.1.0"
+description = "Modality-robust optical-sonar object detection"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "AGPL-3.0"}
+authors = [{name = "MROSDet contributors"}]
+dependencies = ["torch==2.11.0", "torchvision==0.26.0", "numpy>=1.23.5,<3", "opencv-python>=4.11,<5", "Pillow>=10", "PyYAML>=6", "scipy>=1.10", "tqdm>=4.66"]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<9"]
+
+[project.urls]
+Repository = "https://github.com/UM-Research-Ng/MROSDet"
+
+[tool.setuptools.packages.find]
+include = ["mrosdet*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

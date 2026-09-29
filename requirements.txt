@@ -1,0 +1,7 @@
+# Install torch/torchvision first using the CPU or CUDA command in README.
+numpy==1.23.5
+opencv-python==4.11.0.86
+Pillow==12.2.0
+PyYAML==6.0.3
+scipy==1.15.3
+tqdm==4.68.3

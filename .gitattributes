@@ -1,0 +1,3 @@
+* text=auto eol=lf
+# Preserve byte-for-byte dataset provenance, including original label line endings.
+data/umod_sample/** -text whitespace=cr-at-eol

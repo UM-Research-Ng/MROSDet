@@ -1,0 +1,77 @@
+# MROSDet: Modality-Robust Optical-Sonar Detection Paradigm
+
+nc: 9
+task: dual_detect
+scale: n
+end2end: False
+reg_max: 1
+
+modalities:
+  rgb:
+    channels: 3
+  sonar:
+    channels: 3
+
+scales:
+  n: [0.50, 0.25, 1024]
+  s: [0.50, 0.50, 1024]
+  m: [0.50, 1.00, 512]
+  l: [1.00, 1.00, 512]
+  x: [1.00, 1.50, 512]
+
+backbone:
+  - [-1, 1, OSIR, [3, 3]]
+
+  # Optical backbone: preserve low-level localization and recalibrate high-level context.
+  - [0, 1, Index, [3, 0]]
+  - [-1, 1, Conv, [64, 3, 2]]
+  - [-1, 1, Conv, [128, 3, 2]]
+  - [-1, 2, C3k2, [256, False, 0.25]]
+  - [-1, 1, Conv, [256, 3, 2]]
+  - [-1, 2, C3k2, [512, False, 0.25]]
+  - [-1, 1, Conv, [512, 3, 2]]
+  - [-1, 2, LDRC3k2, [512, True]]
+  - [-1, 1, ARGConv, [1024, 3, 2]]
+  - [-1, 2, LDRC3k2, [1024, True]]
+  - [-1, 1, CPRSPPF, [1024, 5, 3, True]]
+  - [-1, 2, ARC2PSA, [1024]]
+
+  # Sonar backbone: matched high-level calibration keeps the two streams aligned.
+  - [0, 1, Index, [3, 1]]
+  - [-1, 1, Conv, [64, 3, 2]]
+  - [-1, 1, Conv, [128, 3, 2]]
+  - [-1, 2, C3k2, [256, False, 0.25]]
+  - [-1, 1, Conv, [256, 3, 2]]
+  - [-1, 2, C3k2, [512, False, 0.25]]
+  - [-1, 1, Conv, [512, 3, 2]]
+  - [-1, 2, LDRC3k2, [512, True]]
+  - [-1, 1, ARGConv, [1024, 3, 2]]
+  - [-1, 2, LDRC3k2, [1024, True]]
+  - [-1, 1, CPRSPPF, [1024, 5, 3, True]]
+  - [-1, 2, ARC2PSA, [1024]]
+
+head:
+  - [[6, 8, 12, 18, 20, 24], 1, MRE, [[512, 512, 1024], 4]]
+
+  - [[6, 18, 25], 1, RGCF, [512, 0]]
+  - [26, 1, Index, [512, 0]]
+  - [26, 1, Index, [512, 1]]
+
+  - [[8, 20, 25], 1, RGCF, [512, 1]]
+  - [29, 1, Index, [512, 0]]
+  - [29, 1, Index, [512, 1]]
+
+  - [[12, 24, 25], 1, RGCF, [1024, 2]]
+  - [32, 1, Index, [1024, 0]]
+  - [32, 1, Index, [1024, 1]]
+
+  - [[27, 30, 33, 28, 31, 34, 25], 1, SDPN, [[512, 512, 1024], [64, 128, 256]]]
+
+  - [35, 1, Index, [64, 0]]
+  - [35, 1, Index, [128, 1]]
+  - [35, 1, Index, [256, 2]]
+  - [35, 1, Index, [64, 3]]
+  - [35, 1, Index, [128, 4]]
+  - [35, 1, Index, [256, 5]]
+
+  - [[36, 37, 38, 39, 40, 41, 25], 1, BCDHead, [nc]]

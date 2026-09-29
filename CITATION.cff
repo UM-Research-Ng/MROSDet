@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+message: >-
+  Please cite this software when using the implementation. The related manuscript
+  is MROSDet: A Modality-Robust Optical-Sonar Fusion Paradigm for Underwater
+  Perception under Sensor Degradation. Its accepted-paper link will be added
+  after acceptance.
+type: software
+title: MROSDet
+version: 0.1.0
+date-released: '2026-09-29'
+license: AGPL-3.0-only
+repository-code: 'https://github.com/UM-Research-Ng/MROSDet'
+url: 'https://github.com/UM-Research-Ng/MROSDet'
+authors:
+  - family-names: Liu
+    given-names: Mingxin
+  - family-names: Wu
+    given-names: Yujie
+  - family-names: Li
+    given-names: Ruixin
+  - family-names: Ji
+    given-names: Ziliang
+  - family-names: Lin
+    given-names: Cong
+keywords:
+  - optical-sonar fusion
+  - underwater perception
+  - object detection
+  - modality reliability
+  - sensor degradation
