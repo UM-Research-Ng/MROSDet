@@ -1,4 +1,4 @@
-# Install torch/torchvision first using the CPU or CUDA command in README.
+# 先按 README 安装 CPU 或 CUDA 对应的 PyTorch 与 torchvision。
 numpy==1.23.5
 opencv-python==4.11.0.86
 Pillow==12.2.0

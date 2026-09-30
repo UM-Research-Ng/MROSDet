@@ -1,8 +1,7 @@
-"""Single-device training, evaluation and paired inference for MROSDet.
+"""MROSDet 的单设备训练、双路评估与配对预测。"""
 
-The learning-rate, warmup and parameter-group rules follow the upstream
-Ultralytics trainer (AGPL-3.0). This small engine does not import that package.
-"""
+# 学习率、预热及参数分组规则改编自 Ultralytics（AGPL-3.0）。
+# 来源及修改说明见 THIRD_PARTY_NOTICES.md。
 
 from __future__ import annotations
 
@@ -32,7 +31,7 @@ IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 
 
 def select_device(value="auto"):
-    """Resolve CPU or one CUDA device, rejecting unsupported multi-device input."""
+    """解析 CPU 或单个 CUDA 设备；不接受多设备配置。"""
     value = str(value)
     if value == "auto":
         value = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -71,6 +70,7 @@ def _seed_worker(_):
 
 
 def read_data_config(path):
+    """读取数据配置，将数据根目录相对于配置文件解析。"""
     path = Path(path).expanduser().resolve()
     with path.open(encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
@@ -103,6 +103,7 @@ def make_loader(data, split, imgsz, batch, workers, augment=False, seed=0):
 
 
 def preprocess(batch, device):
+    """将两路图像转为设备上的浮点张量，并归一化到 [0, 1]。"""
     result = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
     for key in ("img_rgb", "img_sonar"):
         result[key] = result[key].float() / 255.0
@@ -111,7 +112,7 @@ def preprocess(batch, device):
 
 
 def unique_output(path):
-    """Create a new directory without overwriting previous runs."""
+    """创建输出目录；路径已存在时追加编号，保留已有结果。"""
     base = Path(path).expanduser().resolve()
     base.parent.mkdir(parents=True, exist_ok=True)
     for index in range(1, 100000):
@@ -158,7 +159,7 @@ def _flatten(value, prefix=""):
 
 
 def build_optimizer(model, lr=0.000769, weight_decay=0.0005):
-    """AdamW with the original weight / normalization / bias grouping."""
+    """按普通权重、归一化参数和偏置分组构建 AdamW，仅普通权重使用权重衰减。"""
     norm_types = tuple(v for k, v in vars(torch.nn).items() if "Norm" in k and isinstance(v, type))
     weights, norms, biases = [], [], []
     for module_name, module in model.named_modules():
@@ -185,7 +186,7 @@ def linear_lr_factor(epoch, epochs, lrf=0.01):
 
 
 class ModelEMA:
-    """Exponential moving average for evaluation and published training outputs."""
+    """维护参数与浮点缓冲区的指数移动平均，用于验证及保存 best/last 权重。"""
 
     def __init__(self, model, decay=0.9999, tau=2000.0):
         self.model = deepcopy(model).eval().requires_grad_(False)
@@ -212,6 +213,10 @@ def _check_names(model, data):
 
 
 def train(args):
+    """从头训练或加载权重微调，采用梯度累积、线性学习率调度和逐轮验证。
+
+    CUDA 上可启用 AMP；加载权重不会恢复旧优化器状态。
+    """
     from mrosdet.checkpoint import load_model, save_checkpoint
     from mrosdet.loss import DualModalLoss
     from mrosdet.metrics import evaluate
@@ -327,6 +332,7 @@ def train(args):
 
 
 def validate(args):
+    """按两路各自的标签评估指定数据划分，保存独立模态指标。"""
     from mrosdet.checkpoint import load_model
     from mrosdet.metrics import evaluate
 
@@ -355,7 +361,7 @@ def pair_image_files(rgb_root, sonar_root):
 
 
 def scale_detections(detections, original_shape, imgsz):
-    """Undo independent square resizing for one modality; retain confidence/class."""
+    """将单路检测框还原到该模态原图尺寸，保留置信度和类别列。"""
     result = detections.detach().cpu().clone()
     height, width = original_shape[:2]
     if len(result):
@@ -377,6 +383,7 @@ def _draw(image, detections, names):
 
 @torch.inference_mode()
 def predict(args):
+    """读取配对图像，分别保存光学、声纳标注图和原图坐标下的检测结果。"""
     from mrosdet.checkpoint import load_model
     from mrosdet.metrics import postprocess
 

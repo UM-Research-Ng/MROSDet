@@ -4,15 +4,20 @@
 
 作者：Mingxin Liu、Yujie Wu、Ruixin Li、Ziliang Ji、Cong Lin（通讯作者）。论文链接：**接收后更新**。[English README](README.md)
 
-MROSDet 面向配对的光学与声纳图像，在估计模态可靠性后进行特征交互，分别输出 RGB 和 Sonar 检测结果。两种模态使用各自的标注框和原图坐标，不能将光学标注直接当作声纳标注。
+MROSDet 面向传感器退化条件下的水下光学—声纳目标检测，通过估计两种模态的可靠性来引导特征融合，并在各传感器的图像坐标系中分别输出检测结果。
 
-本次发布包括独立 `mrosdet` 包、`train.py`、`val.py`、`predict.py`、一份转换后的模型权重，以及 100 对 UMOD 示例数据。不包含完整研究数据、全部原始初始化资源、历史实验日志和传感器退化生成工具。示例数据用于检查代码流程，在这个小子集上训练不等于复现论文实验。
+本仓库提供模型、训练与评估脚本、一份训练权重，以及 100 对用于运行示例的光学—声纳图像。
 
-## 方法与代码来源
+## 方法
 
-匹配的双路骨干提取特征后，**MRE** 估计多尺度模态可靠性、退化 logits 和不确定性；**RGCF** 完成可靠性引导的双向残差融合；**SDPN** 构建**两组三尺度检测特征**；**BCDHead** 分别进行光学和声纳检测。
+匹配的双路骨干首先提取光学与声纳的多尺度特征，随后通过四个模块估计可靠性、交互互补信息，并保留各自的检测分支：
 
-独立版本保留研究模型的计算逻辑、双路独立标签、拉伸缩放预处理和损失行为，无需安装 `ultralytics`。其中源自 Ultralytics 的网络层、检测与训练组件继续保留版权和许可说明，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。运行依赖的独立不意味着代码没有上游来源。
+1. **Modality Reliability Estimator（MRE，模态可靠性估计器）**：预测各尺度的相对模态权重和条件分类输出，并由模态权重计算不确定性分数。
+2. **Reliability-Guided Cross-modal Fusion（RGCF，可靠性引导的跨模态融合）**：根据可靠性估计进行双向残差特征融合。
+3. **Synergistic Dual-Pyramid Neck（SDPN，协同双金字塔颈部网络）**：处理融合特征，构建**两组三尺度检测特征**。
+4. **Bimodal Collaborative Detection Head（BCDHead，双模态协同检测头）**：利用两组特征分别完成光学与声纳检测，使用各自的标注和图像坐标。
+
+输入图像分别拉伸为正方形，预测框再按对应原图尺寸还原。
 
 ## 安装
 
@@ -29,11 +34,11 @@ python -m pip install -r requirements.txt
 python -m pip install -e .
 ```
 
-CUDA 13.0 构建需要兼容的 NVIDIA 驱动。只使用 CPU 时，将 PyTorch 安装命令中的 `cu130` 改成 `cpu`，运行脚本时使用 `--device cpu`。首版支持 CPU 和单张 CUDA GPU；未验证多 GPU 训练。`requirements.txt` 固定参考环境的非 PyTorch 依赖版本，`pyproject.toml` 声明兼容范围；运行时不要求云账号，也不会自动下载模型。
+CUDA 13.0 构建需要兼容的 NVIDIA 驱动。只使用 CPU 时，将 PyTorch 安装命令中的 `cu130` 改成 `cpu`，运行脚本时使用 `--device cpu`。当前支持 CPU 和单张 CUDA GPU。`requirements.txt` 固定参考环境的非 PyTorch 依赖版本，`pyproject.toml` 声明依赖范围。
 
 ## 下载权重
 
-权重作为 [v0.1.0 Release](https://github.com/UM-Research-Ng/MROSDet/releases/tag/v0.1.0) 附件提供，不存入源码 Git 历史：
+训练权重可从 [v0.1.0 Release](https://github.com/UM-Research-Ng/MROSDet/releases/tag/v0.1.0) 下载：
 
 ```bash
 mkdir -p weights
@@ -44,7 +49,7 @@ curl -fL https://github.com/UM-Research-Ng/MROSDet/releases/download/v0.1.0/SHA2
 
 macOS 校验命令可用 `shasum -a 256 -c SHA256SUMS`。
 
-转换后的权重仅保留参数、模型配置、类别、必要的非参数状态、格式版本和来源校验值，使用 `weights_only=True` 加载。文件不包含旧 Python 模型对象、服务器路径、优化器状态和历史训练记录。它适合预测、评估或新一轮微调，不用于恢复旧训练的优化器进度。其他研究权重和第三方预训练权重不在本次发布范围内。
+该权重对应 UMOD 的 9 个类别，可用于验证、预测和微调。文件以纯权重格式保存模型参数与配置，不包含优化器状态，因此微调会开始一轮新的训练。
 
 ## 示例数据
 
@@ -58,13 +63,13 @@ data/umod_sample/
   summary.json
 ```
 
-标签每行格式为 `class_id center_x center_y width height`，类别从 0 开始，坐标相对于该模态的原图归一化。存在但为空的标签文件表示无目标背景图；缺失标签与空标签不是一回事。文件配对、类别范围、图像解码和 SHA-256 校验信息见[数据说明](data/umod_sample/README.md)。
+标签每行包含五列：`class_id center_x center_y width height`。类别从 0 开始，坐标相对于对应模态的原图归一化，两种模态各自标注。空标签文件表示背景图，缺失标签会报错。格式与校验信息见[数据说明](data/umod_sample/README.md)。
 
-该数据是 **UMOD 示例子集**，不应称为完整 RUMOD 或完整论文测试集。图像和标注使用 [CC BY 4.0](data/umod_sample/LICENSE) 许可。
+该子集用于运行示例。本次发布不包含完整 RUMOD 基准、完整论文测试集、原始初始化资源和退化生成工具；仅在这 100 对样本上训练不能复现论文实验。
 
 ## 训练
 
-默认从头训练，不隐式读取其他权重：
+默认从头训练：
 
 ```bash
 python train.py --data configs/umod_sample.yaml --model configs/mrosdet.yaml \
@@ -80,9 +85,9 @@ python train.py --data configs/umod_sample.yaml --model configs/mrosdet.yaml \
   --output outputs/finetune
 ```
 
-提供 `--weights` 后，模型结构和类别来自该权重，数据集的类别 ID 与名称必须完全一致。`--model` 用于从头训练时选择结构，不会覆盖已加载权重的模型结构。
+提供 `--weights` 后，模型结构和类别来自该权重，数据集的类别 ID 与名称必须一致。`--model` 用于从头训练时选择结构。
 
-执行一轮小规模流程检查：
+运行一轮训练示例：
 
 ```bash
 python train.py --data configs/umod_sample.yaml --model configs/mrosdet.yaml \
@@ -90,7 +95,9 @@ python train.py --data configs/umod_sample.yaml --model configs/mrosdet.yaml \
   --output outputs/smoke
 ```
 
-默认配置为 20 轮、batch 32、640 输入尺寸、workers 0、seed 0、AdamW、初始学习率 0.000769、weight decay 0.0005、线性学习率调度及 3 轮 warmup；CUDA 下启用 AMP，保留梯度累积、EMA 与双模态损失逻辑。训练权重和指标写入 `--output`。显存有限时需显式减小 batch；CPU 训练较慢。
+默认配置为 20 轮、batch 32、640 输入尺寸、workers 0 和 seed 0。训练采用 AdamW，初始学习率为 0.000769，weight decay 为 0.0005，使用线性学习率调度和 3 轮 warmup。CUDA 下启用 AMP，并使用梯度累积和 EMA。显存有限时可减小 `--batch`。
+
+**配置说明：**当前训练入口默认使用 AdamW，初始学习率为 0.000769；稿件描述的是 SGD，初始学习率为 0.01。两者的优化器设置不同，上述命令使用当前代码的默认设置。
 
 ## 验证与预测
 
@@ -112,7 +119,7 @@ python predict.py --weights weights/best.pt \
 
 预测支持 `--conf`（置信度，默认 0.25）、`--iou`（NMS IoU，默认 0.7）、`--max-det`（每图最多检测数，默认 300）和 `--limit`（最多输入对数，默认 0 即全部）。输出图保留各自的输入格式。
 
-三个入口均支持 `--help` 和绝对路径。命令行相对路径以仓库根目录为基准，数据 YAML 内的 `path` 以 YAML 所在目录为基准，模态路径以数据根目录为基准。因此，在其他目录执行 `python /path/to/MROSDet/val.py --weights weights/best.pt` 也能定位仓库内的权重。缺失权重、图像对或配置会明确报错。10 对示例测试图的结果不代表完整论文基准性能。
+三个入口均支持 `--help` 和绝对路径。命令行相对路径以仓库根目录为基准，数据 YAML 内的 `path` 以 YAML 所在目录为基准，模态路径以数据根目录为基准。在其他目录执行 `python /path/to/MROSDet/val.py --weights weights/best.pt` 也能定位仓库内的权重。
 
 | 入口 | 输出目录中的文件 |
 | --- | --- |
@@ -120,17 +127,15 @@ python predict.py --weights weights/best.pt \
 | `val.py` | `metrics.json`，包括 RGB/Sonar 总体与逐类指标 |
 | `predict.py` | `rgb/`、`sonar/`、`predictions.json`；每个检测包含原图像素 `xyxy` 坐标、置信度、类别 ID 和名称 |
 
-输出目录已存在时会新建带编号的同级目录，例如 `outputs/train2`，保留上次结果。`best.pt` 按 RGB/Sonar 的 mAP50-95 均值选择，不是分别保存两路各自最优模型。
+输出目录已存在时会新建带编号的同级目录，例如 `outputs/train2`。`best.pt` 按 RGB/Sonar 的 mAP50-95 均值选择。
 
 ## 接入自己的数据
 
-参考示例组织目录，复制 `configs/umod_sample.yaml` 并修改根目录与类别名称。两路相同 ID 应对应相同语义类别，但标注框应独立标注；相关视频帧或同次采集应放在同一划分，避免信息泄漏。改变类别数时需同步调整模型配置，并省略 `--weights` 从头训练。公开权重针对原始 9 类；入口会拒绝不同类别定义，不会自动跳过不兼容检测头进行部分加载。
+参考示例组织目录，复制 `configs/umod_sample.yaml` 并修改根目录与类别名称。两路使用一致的类别 ID 和各自的标注框，相关视频帧或同次采集应放在同一划分，避免信息泄漏。使用新类别时，同步调整模型配置，并省略 `--weights` 从头训练。
 
-维护者可通过 `tools/prepare_sample.py --source <UMOD根目录> --destination <不存在的新目录>` 使用固定 seed 0 重新制作 70/20/10 示例。脚本检查全部源数据标签、图像解码与内容哈希；缺失、非法标签、无法解码或两模态内容完全相同的图像对会排除并记录，不会修复原数据。选出的样本仍必须满足数量与双模态 9 类覆盖要求。清单仅包含相对路径和校验值；脚本不会下载完整数据。
+标签检查和示例抽样方法见[数据说明](data/umod_sample/README.md)。
 
-## 验证、引用与许可
-
-发布前验收包括：脱离原研究目录的独立导入、新旧模型 FP32 数值对齐（`atol=1e-5、rtol=1e-4`）、100 对样本检查、真实单轮训练、公开/新训练权重的验证与预测，以及异常输入检查。测试代码位于 `tests/`。这些检查用于确认移植和调用成功，不等于完成全部论文复现实验。
+## 测试
 
 在仓库根目录运行公开单元测试：
 
@@ -139,8 +144,10 @@ python -m pip install -e '.[test]' -c requirements.txt
 python -m pytest -q
 ```
 
-公开测试使用合成输入与临时目录，不需要私有研究源码。新旧数值对齐由发布维护者使用原研究源码单独完成。
+测试使用合成输入和临时目录，覆盖权重加载、成对数据、损失、检测指标和命令行工具。
 
-软件引用见 [CITATION.cff](CITATION.cff)。论文链接和正式书目信息将在接收后补充，当前不声明期刊、DOI 或接收状态。
+## 引用与许可
 
-代码与公开模型权重使用 [AGPL-3.0](LICENSE)；示例图像和标注使用 [CC BY 4.0](data/umod_sample/LICENSE)。上游版权、许可证和修改说明见源文件及 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+软件引用见 [CITATION.cff](CITATION.cff)，论文链接将在接收后补充。
+
+代码与模型权重使用 [AGPL-3.0](LICENSE)，示例图像和标注使用 [CC BY 4.0](data/umod_sample/LICENSE)。组件来源、版权和修改说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

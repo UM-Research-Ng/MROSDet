@@ -1,4 +1,4 @@
-"""Predict paired optical/sonar images and save per-modality images and JSON boxes."""
+"""对配对光学—声纳图像进行预测，保存两路标注图与 JSON 检测结果。"""
 
 import argparse
 import logging

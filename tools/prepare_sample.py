@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Create the fixed, licensed UMOD demonstration subset without changing its source.
+"""从 UMOD 抽取固定的 100 对示例，保留原有 train/val/test 归属。
 
-The destination must not exist. All source labels and images are audited before
-any output is written. Invalid pairs are excluded and reported, never repaired.
-Source train/val/test membership is never reassigned.
+先检查源图像与标签，再写入尚不存在的目标目录；记录并排除不合法样本，
+不修改源数据。抽样使用固定随机种子，兼顾两路类别覆盖并排除完全重复图像。
 """
 
 from __future__ import annotations
@@ -85,7 +84,7 @@ def label_classes(path: Path) -> tuple[int, ...]:
             continue
         fields = line.split()
         if len(fields) != 5:
-            raise ValueError(f"Expected five YOLO label fields: {path}:{line_number}")
+            raise ValueError(f"Expected five normalized detection label fields: {path}:{line_number}")
         try:
             values = [float(value) for value in fields]
         except ValueError as exc:
@@ -102,7 +101,7 @@ def label_classes(path: Path) -> tuple[int, ...]:
                 or x + width / 2 > 1 + tolerance or y + height / 2 > 1 + tolerance):
             raise ValueError(f"Box extends outside image: {path}:{line_number}")
         classes.append(int(cls))
-    # An existing empty file is a valid background annotation, not a missing label.
+    # 空标签文件表示背景，与标签文件缺失分别处理。
     return tuple(classes)
 
 
@@ -124,7 +123,7 @@ def inspect_source(source: Path) -> tuple[dict[str, list[Pair]], dict]:
             for modality, images, labels in zip(MODALITIES, image_maps, label_maps)
         }
         pairs = []
-        # Inspect every recognized source image and label, including orphans.
+        # 检查所有已识别的图像和标签，包括无法配对的文件。
         stems = set().union(*(set(files) for files in image_maps + label_maps))
         for stem in sorted(stems):
             views = []
@@ -142,7 +141,7 @@ def inspect_source(source: Path) -> tuple[dict[str, list[Pair]], dict]:
                         classes = label_classes(label_path)
                         label_hash = sha256(label_path)
                     except (OSError, ValueError) as exc:
-                        # Remove the local source prefix from published diagnostics.
+                        # 诊断只保留相对路径，不写入本机源数据目录。
                         issues.append({"modality": modality, "reason": "invalid_label",
                                        "detail": str(exc).replace(str(source) + "/", "")})
                 if image_path is None:
@@ -193,8 +192,7 @@ def select_pairs(candidates: dict[str, list[Pair]], seed: int) -> dict[str, list
     rng = random.Random(seed)
     selected: dict[str, list[Pair]] = {}
     used_hashes: set[str] = set()
-    # Reserve the smallest split first, so the ten-pair test set gets first access
-    # to its rare classes. Selection never moves a source sample between splits.
+    # 先选最小的测试划分，为其中的稀有类别留出样本；不跨划分移动数据。
     for split in ("test", "val", "train"):
         pool = [pair for pair in candidates[split] if not pair.hashes & used_hashes]
         rng.shuffle(pool)
@@ -204,8 +202,7 @@ def select_pairs(candidates: dict[str, list[Pair]], seed: int) -> dict[str, list
         while len(chosen) < SPLITS[split]:
             if not pool:
                 raise ValueError(f"Cannot select {SPLITS[split]} non-overlapping {split} pairs")
-            # First cover unseen classes in each modality. Rarer classes win
-            # ties; the fixed seeded shuffle settles otherwise equivalent pairs.
+            # 优先补齐两路尚未覆盖的类别，其次考虑稀有程度；同分时沿用随机顺序。
             best = max(range(len(pool)), key=lambda index: (
                 len(pool[index].tokens - covered),
                 sum(1 / frequency[token] for token in sorted(pool[index].tokens - covered)),
@@ -214,8 +211,7 @@ def select_pairs(candidates: dict[str, list[Pair]], seed: int) -> dict[str, list
             chosen.append(pair)
             covered.update(pair.tokens)
             used_hashes.update(pair.hashes)
-            # Keep the public subset free from exact duplicate image content,
-            # including within a split, in either modality.
+            # 任一路图像文件的 SHA-256 相同即排除，包括当前划分内的重复。
             pool = [other for other in pool if not other.hashes & pair.hashes]
         selected[split] = sorted(chosen, key=lambda pair: pair.stem)
     expected = {(modality, cls) for modality in MODALITIES for cls in range(NUM_CLASSES)}

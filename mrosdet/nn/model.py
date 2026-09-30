@@ -1,6 +1,6 @@
 # Ultralytics AGPL-3.0 License - https://ultralytics.com/license
-# Adapted from the project's nn/tasks.py for standalone MROSDet, 2026-09-29.
-"""Construct the paper's two-stream model without a framework runtime."""
+# 基于项目 nn/tasks.py 整理为独立模型，2026-09-29。
+"""按论文配置构建光学–声纳双流模型，无需原框架运行时。"""
 from __future__ import annotations
 
 import ast
@@ -24,10 +24,9 @@ _MODULES = {
 
 
 def parse_model(config: dict, channels: int = 3) -> tuple[nn.Sequential, list[int]]:
-    """Apply the original depth/channel rules to the MROSDet YAML graph.
+    """按原始深度/通道缩放规则解析 MROSDet 配置图。
 
-    The accepted modules are deliberately restricted to the paper's dependency
-    closure. Configuration never executes arbitrary Python expressions.
+    仅接受本模型所需的模块白名单；字符串参数用字面量解析，不执行任意 Python 表达式。
     """
     nc = int(config["nc"])
     scale = config.get("scale", "n")
@@ -100,11 +99,11 @@ def parse_model(config: dict, channels: int = 3) -> tuple[nn.Sequential, list[in
 
 
 class MROSDet(nn.Module):
-    """The 43-layer optical/sonar network described by configs/mrosdet.yaml.
+    """由 configs/mrosdet.yaml 定义的 43 层光学–声纳模型。
 
-    Inputs are normalized BCHW tensors in a dictionary with img_rgb/img_sonar.
-    During training each detection branch returns boxes/scores/feats; evaluation
-    returns (decoded predictions, raw predictions). Reliability is always a dict.
+    输入字典包含已归一化的 img_rgb/img_sonar，张量形状均为 BCHW。
+    输出字典含 rgb、sonar、reliability；训练时各检测分支返回 boxes/scores/feats，
+    评估时各分支返回 (解码预测, 原始预测)，可靠性信息保持为字典。
     """
 
     def __init__(self, config: str | Path | dict | None = None, *, nc: int | None = None, ch: int = 3):
@@ -136,7 +135,7 @@ class MROSDet(nn.Module):
         head.inplace = self.inplace
         self.model.eval()
         head.training = True
-        # Match the original stride probe and preserve BatchNorm running values.
+        # 保持原始步长探测方式，同时避免更新批归一化的运行统计量。
         with torch.no_grad():
             probe = torch.zeros(1, ch, 256, 256)
             output = self.forward({"img_rgb": probe, "img_sonar": probe})["rgb"]
@@ -145,7 +144,7 @@ class MROSDet(nn.Module):
         head.rgb.stride = head.stride
         head.sonar.stride = head.stride
         self.stride = head.stride
-        # The probe ran before strides existed; rebuild its inference-only cache.
+        # 探测时步长尚未赋值，需让后续推理重建网格点缓存。
         head.rgb.shape = head.sonar.shape = None
         self.model.train()
         head.bias_init()
@@ -161,7 +160,7 @@ class MROSDet(nn.Module):
         return self.model[-1].end2end
 
     def forward(self, x):
-        """Run the original indexed graph; loss is computed by DualModalLoss."""
+        """按层索引执行计算图，仅生成预测；损失由外部 DualModalLoss 计算。"""
         saved = []
         for layer in self.model:
             if layer.f != -1:
@@ -173,11 +172,11 @@ class MROSDet(nn.Module):
         return x
 
     def predict(self, x):
-        """Alias for direct paired-image inference."""
+        """直接成对图像预测的别名；是否解码取决于模型的 train/eval 状态。"""
         return self.forward(x)
 
     def _apply(self, fn):
-        """Move non-persistent inference caches with parameters and buffers."""
+        """同步迁移步长及非持久化推理缓存，并触发网格点缓存重建。"""
         super()._apply(fn)
         if hasattr(self, "model"):
             head = self.model[-1]

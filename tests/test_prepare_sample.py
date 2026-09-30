@@ -1,4 +1,4 @@
-"""Synthetic checks for deterministic, non-destructive demonstration sampling."""
+"""用合成数据检查抽样可重复性、配对规则及源文件保护。"""
 
 import json
 from pathlib import Path
@@ -136,12 +136,12 @@ def test_destination_cannot_be_inside_source(source_dataset):
 
 
 @pytest.mark.parametrize("row", [
-    "0 0.5 0.5 0.1",       # wrong field count
-    "0.5 0.5 0.5 0.1 0.1", # fractional class
-    "9 0.5 0.5 0.1 0.1",   # class outside the nine-class vocabulary
-    "0 nan 0.5 0.1 0.1",   # non-finite coordinate
-    "0 0.5 0.5 0 0.1",     # zero-area box
-    "0 0.01 0.5 0.5 0.1",  # box outside image bounds
+    "0 0.5 0.5 0.1",       # 列数不足
+    "0.5 0.5 0.5 0.1 0.1", # 类别编号不是整数
+    "9 0.5 0.5 0.1 0.1",   # 类别编号超出九类范围
+    "0 nan 0.5 0.1 0.1",   # 坐标不是有限数值
+    "0 0.5 0.5 0 0.1",     # 框面积为零
+    "0 0.01 0.5 0.5 0.1",  # 框超出图像边界
 ])
 def test_illegal_labels_are_rejected(tmp_path, row):
     path = tmp_path / "label.txt"

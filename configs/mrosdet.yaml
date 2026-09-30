@@ -1,4 +1,4 @@
-# MROSDet: Modality-Robust Optical-Sonar Detection Paradigm
+# MROSDet：模态鲁棒光学–声纳目标检测
 
 nc: 9
 task: dual_detect
@@ -22,7 +22,7 @@ scales:
 backbone:
   - [-1, 1, OSIR, [3, 3]]
 
-  # Optical backbone: preserve low-level localization and recalibrate high-level context.
+  # 光学主干：保留低层定位特征，在高层加入细节与上下文重标定。
   - [0, 1, Index, [3, 0]]
   - [-1, 1, Conv, [64, 3, 2]]
   - [-1, 1, Conv, [128, 3, 2]]
@@ -36,7 +36,7 @@ backbone:
   - [-1, 1, CPRSPPF, [1024, 5, 3, True]]
   - [-1, 2, ARC2PSA, [1024]]
 
-  # Sonar backbone: matched high-level calibration keeps the two streams aligned.
+  # 声纳主干：采用对应的高层重标定结构，分别提取声纳特征。
   - [0, 1, Index, [3, 1]]
   - [-1, 1, Conv, [64, 3, 2]]
   - [-1, 1, Conv, [128, 3, 2]]

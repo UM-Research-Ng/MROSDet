@@ -1,4 +1,4 @@
-"""Train MROSDet from scratch, or fine-tune an explicitly supplied checkpoint."""
+"""训练 MROSDet；默认随机初始化，指定 --weights 时加载权重进行微调。"""
 
 import argparse
 import logging

@@ -1,4 +1,4 @@
-"""Portable checkpoint and paired-data contract tests using temporary files only."""
+"""检查权重读写和成对数据加载，所有测试文件均写入临时目录。"""
 
 from copy import deepcopy
 from pathlib import Path
@@ -23,11 +23,11 @@ from mrosdet.nn.model import MROSDet
 
 @pytest.fixture(scope="module")
 def checkpoint_case(tmp_path_factory):
-    """Construct only two small models across all checkpoint roundtrip assertions."""
+    """复用两个小模型，检查权重保存后能否正确恢复。"""
     root = Path(__file__).resolve().parents[1]
     config = yaml.safe_load((root / "configs/mrosdet.yaml").read_text(encoding="utf-8"))
     config["nc"] = 2
-    # ARC2PSA needs at least 128 channels for its one-head attention block.
+    # ARC2PSA 在默认扩展率 0.5 下，输入至少 128 通道才能保留一个注意力头。
     config["scales"]["n"] = [0.25, 0.125, 1024]
     config["head"][10][3][1] = [16, 32, 64]
     torch.manual_seed(5)
@@ -106,7 +106,7 @@ def test_missing_checkpoint_fails_instead_of_random_initialization(tmp_path):
 
 
 class _UnsupportedPayload:
-    """Harmless custom class that must not be reconstructed by the release loader."""
+    """用于验证安全加载器不会反序列化自定义 Python 类。"""
 
 
 def test_loader_rejects_python_objects_outside_weights_only_format(tmp_path):
@@ -176,7 +176,7 @@ def test_dataset_reads_paired_colors_shapes_and_independent_labels(tmp_path):
     assert sample["cls_rgb"].tolist() == [[0.0]]
     assert sample["cls_sonar"].tolist() == [[1.0]]
     assert not torch.equal(sample["bboxes_rgb"], sample["bboxes_sonar"])
-    # Consumers may mutate a returned batch without altering the cached labels.
+    # 修改返回批次中的标签，不应影响数据集缓存的原始标签。
     sample["bboxes_rgb"].zero_()
     assert dataset[0]["bboxes_rgb"].count_nonzero() == 4
 
@@ -196,17 +196,17 @@ def test_empty_labels_are_valid_and_collation_offsets_each_stream(tmp_path):
 
 
 @pytest.mark.parametrize("label", [
-    "0 0.5 0.5 0.2",                 # missing a column
-    "0 0.5 0.5 0.2 0.2 0",           # extra column
-    "0 0.5 nan 0.2 0.2",             # non-finite coordinate
-    "0 inf 0.5 0.2 0.2",             # non-finite coordinate
-    "0.5 0.5 0.5 0.2 0.2",           # fractional class
-    "2 0.5 0.5 0.2 0.2",             # outside class range
-    "-1 0.5 0.5 0.2 0.2",            # negative class
-    "0 1.2 0.5 0.2 0.2",             # non-normalized coordinate
-    "0 0.5 0.5 0 0.2",               # zero-width box
-    "0 0.05 0.5 0.2 0.2",            # box crosses image border
-    "not a detection label",          # malformed text
+    "0 0.5 0.5 0.2",                 # 缺少一列
+    "0 0.5 0.5 0.2 0.2 0",           # 多出一列
+    "0 0.5 nan 0.2 0.2",             # 坐标不是有限数值
+    "0 inf 0.5 0.2 0.2",             # 坐标不是有限数值
+    "0.5 0.5 0.5 0.2 0.2",           # 类别编号不是整数
+    "2 0.5 0.5 0.2 0.2",             # 类别编号超出范围
+    "-1 0.5 0.5 0.2 0.2",            # 类别编号为负
+    "0 1.2 0.5 0.2 0.2",             # 坐标超出归一化范围
+    "0 0.5 0.5 0 0.2",               # 框宽度为零
+    "0 0.05 0.5 0.2 0.2",            # 框超出图像边界
+    "not a detection label",          # 非法文本
 ])
 def test_invalid_labels_are_rejected(tmp_path, label):
     path = tmp_path / "invalid.txt"

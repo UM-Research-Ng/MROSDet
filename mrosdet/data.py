@@ -1,6 +1,6 @@
 # Adapted from Ultralytics, AGPL-3.0. See THIRD_PARTY_NOTICES.md.
-# MROSDet contributors: portable paired loading and strict validation, 2026-09-29.
-"""Paired optical/sonar images with independent normalized detection labels."""
+# MROSDet 修改：可移植的成对加载与标签校验，2026-09-29。
+"""按相对路径配对光学与声纳图像，分别读取两路归一化检测标签。"""
 
 from __future__ import annotations
 
@@ -69,6 +69,7 @@ def image_index(directory):
 
 
 def paired_images(rgb_dir, sonar_dir):
+    """按去除扩展名的相对路径匹配图像，两路必须一一对应。"""
     rgb, sonar = image_index(rgb_dir), image_index(sonar_dir)
     if rgb.keys() != sonar.keys():
         missing = sorted(rgb.keys() ^ sonar.keys())[:10]
@@ -77,6 +78,7 @@ def paired_images(rgb_dir, sonar_dir):
 
 
 def read_labels(path, nc):
+    """读取五列标签并检查类别和框坐标；空文件表示背景，缺失文件视为错误。"""
     path = Path(path)
     if not path.is_file():
         raise FileNotFoundError(f"Missing label (create an empty file for background): {path}")
@@ -101,6 +103,7 @@ def read_labels(path, nc):
 
 
 class PairedDataset(Dataset):
+    """双模态数据集：图像分别拉伸到正方形，保留各自的标签与原图尺寸。"""
     def __init__(self, config, split="train", imgsz=640, augment=False):
         self.data = load_config(config)
         self.names, self.nc = self.data["names"], self.data["nc"]
@@ -123,6 +126,7 @@ class PairedDataset(Dataset):
         return len(self.pairs)
 
     def _load_image(self, path):
+        """解码为 RGB 通道顺序，返回 CHW 图像张量和缩放前的高宽。"""
         im = cv2.imread(str(path), cv2.IMREAD_COLOR)
         if im is None:
             raise ValueError(f"Image cannot be decoded: {path}")
@@ -137,6 +141,7 @@ class PairedDataset(Dataset):
         sonar, sonar_shape = self._load_image(sp)
         condition = 0
         if self.augment:
+            # 以一定概率降低一路亮度，其余样本保持原样；记录条件标签但不改变几何对应。
             r = random.random()
             condition = 0 if r < 0.70 else (1 if r < 0.85 else 2)
             factor = random.uniform(0.55, 0.85)

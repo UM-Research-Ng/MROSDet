@@ -1,4 +1,4 @@
-"""Focused checks for optimizer semantics and paired prediction coordinates."""
+"""检查优化器参数分组、学习率规则与两路预测坐标还原。"""
 
 from pathlib import Path
 

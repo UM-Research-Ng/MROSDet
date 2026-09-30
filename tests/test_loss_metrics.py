@@ -1,4 +1,4 @@
-"""Numerical edge cases for the compact detection loss and evaluation path."""
+"""检查检测损失与评估流程在边界输入下的数值行为。"""
 
 from types import SimpleNamespace
 

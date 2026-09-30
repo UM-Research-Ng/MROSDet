@@ -1,6 +1,6 @@
 # Ultralytics AGPL-3.0 License - https://ultralytics.com/license
-# Adapted for the standalone MROSDet release, 2026-09-29; imports only.
-"""MROSDet modules for modality-robust optical-sonar detection."""
+# 基于项目原实现独立整理，2026-09-29；保留原计算逻辑。
+"""MROSDet 光学–声纳双流建模与可靠性引导融合模块。"""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from .head import Detect
 
 
 class OSIR(nn.Module):
-    """Optical-Sonar Input Router for paired or concatenated modality tensors."""
+    """光学–声纳输入路由器（OSIR），拆分成对输入或沿通道拼接的输入。"""
 
     def __init__(self, rgb_channels: int = 3, sonar_channels: int = 3):
         super().__init__()
@@ -22,7 +22,7 @@ class OSIR(nn.Module):
         self.sonar_channels = sonar_channels
 
     def forward(self, x):
-        """Return [rgb, sonar] from a dict, tuple/list, or concatenated tensor."""
+        """从字典、二元序列或拼接张量返回 [rgb, sonar]。"""
         if isinstance(x, dict):
             return [x["img_rgb"], x["img_sonar"]]
         if isinstance(x, (list, tuple)):
@@ -33,7 +33,7 @@ class OSIR(nn.Module):
 
 
 class _ResidualGate(nn.Module):
-    """Small channel-spatial residual gate initialized close to identity."""
+    """通道与空间联合残差门控；负值初始化使输出接近恒等映射。"""
 
     def __init__(self, channels: int, init: float = -4.0):
         super().__init__()
@@ -59,7 +59,7 @@ class _ResidualGate(nn.Module):
 
 
 class ARGConv(Conv):
-    """Adaptive Residual-Gated Convolution for reliability-aware feature calibration."""
+    """自适应残差门控卷积（ARGConv），对卷积输出施加通道–空间重标定。"""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -73,7 +73,7 @@ class ARGConv(Conv):
 
 
 class LDRC3k2(C3k2):
-    """Local Detail Recalibrated C3k2 block for small underwater targets."""
+    """局部细节重标定块（LDRC3k2）：在 C3k2 后加入细节残差与门控。"""
 
     def __init__(
         self,
@@ -98,7 +98,7 @@ class LDRC3k2(C3k2):
 
 
 class CPRSPPF(SPPF):
-    """Contextual Pyramid Recalibrated SPPF block."""
+    """上下文金字塔重标定块（CPRSPPF）：在 SPPF 后施加残差门控。"""
 
     def __init__(self, c1: int, c2: int, k: int = 5, n: int = 3, shortcut: bool = False):
         super().__init__(c1, c2, k, n, shortcut)
@@ -109,7 +109,7 @@ class CPRSPPF(SPPF):
 
 
 class ARC2PSA(C2PSA):
-    """Attention-Recalibrated C2PSA block for sharper localization."""
+    """注意力重标定块（ARC2PSA）：在 C2PSA 后加入可学习强度的局部细化残差。"""
 
     def __init__(self, c1: int, c2: int, n: int = 1, e: float = 0.5):
         super().__init__(c1, c2, n, e)
@@ -122,7 +122,12 @@ class ARC2PSA(C2PSA):
 
 
 class MRE(nn.Module):
-    """Modality Reliability Estimator for per-scale optical and sonar confidence."""
+    """模态可靠性估计器（MRE），由两路多尺度池化特征预测相对融合权重。
+
+    weights 为 (B, 3, 2)，每个尺度的两路权重之和为 1，不是经校准的检测置信度。
+    condition_logits 为条件分类原始输出；uncertainty=1-max(weights) 是权重均衡程度的
+    启发式度量，也不是经校准的不确定性概率。
+    """
 
     def __init__(self, channels: list[int], num_conditions: int = 4, hidden: int = 128):
         super().__init__()
@@ -153,7 +158,11 @@ class MRE(nn.Module):
 
 
 class RGCF(nn.Module):
-    """Reliability-Guided Cross-modal Fusion for one pyramid scale."""
+    """可靠性引导跨模态融合（RGCF），在单个尺度上向两路注入对方的门控残差。
+
+    固定尺度增益依次为 0、0.35、0.65，并叠加可学习系数与对方模态权重；
+    因此首尺度不发生跨模态残差注入。固定增益不写入 state_dict。
+    """
 
     def __init__(self, channels: int, scale_index: int):
         super().__init__()
@@ -190,7 +199,7 @@ class RGCF(nn.Module):
         self.register_buffer("scale_gain", torch.tensor([0.0, 0.35, 0.65]), persistent=False)
 
     def _attention(self, target: torch.Tensor, auxiliary: torch.Tensor, branch: str) -> torch.Tensor:
-        """Return channel-spatial gate for auxiliary residual injection."""
+        """联合目标特征与辅助特征，生成用于残差注入的通道–空间门控。"""
         pair = torch.cat((target, auxiliary), dim=1)
         if branch == "rgb":
             return self.rgb_channel_gate(pair) * self.rgb_spatial_gate(pair)
@@ -216,7 +225,7 @@ class RGCF(nn.Module):
 
 
 class _PANNeck(nn.Module):
-    """Lightweight PAN/FPN neck for one modality."""
+    """单模态三尺度特征金字塔：先自顶向下融合，再自底向上聚合。"""
 
     def __init__(self, in_channels: list[int], out_channels: list[int]):
         super().__init__()
@@ -242,7 +251,11 @@ class _PANNeck(nn.Module):
 
 
 class SDPN(nn.Module):
-    """Synergistic Dual-Pyramid Neck with post-neck cross-modal adaptation."""
+    """协同双金字塔颈部（SDPN），先分别聚合两路特征，再进行跨模态残差适配。
+
+    固定后融合增益为 0、0.15、0.25，首尺度不注入跨模态残差；增益不写入 state_dict。
+    输出顺序为 RGB 的三个尺度，再接 Sonar 的三个尺度，不是六个不同尺度。
+    """
 
     def __init__(self, in_channels: list[int], out_channels: list[int]):
         super().__init__()
@@ -275,7 +288,10 @@ class SDPN(nn.Module):
 
 
 class BCDHead(nn.Module):
-    """Bimodal Collaborative Detection Head for optical and sonar predictions."""
+    """双模态协同检测头（BCDHead），为光学与声纳各建立一个三尺度检测分支。
+
+    两路分别返回预测，并附带 reliability 字典；这里不合并两路边框或执行 NMS。
+    """
 
     def __init__(self, nc: int = 80, reg_max: int = 16, end2end: bool = False, ch: tuple = ()):
         super().__init__()
@@ -305,7 +321,7 @@ class BCDHead(nn.Module):
 
     @staticmethod
     def _sync_head_cache(head: Detect, feats: list[torch.Tensor]) -> None:
-        """Force anchor cache rebuild when a reloaded head crosses device or dtype boundaries."""
+        """设备或精度变化后清除形状标记，触发推理网格点缓存重建。"""
         if head.training or not hasattr(head, "anchors") or head.anchors.numel() == 0:
             return
         ref = feats[0]

@@ -1,6 +1,6 @@
 # Derived from Ultralytics (AGPL-3.0), https://github.com/ultralytics/ultralytics.
 # Copyright (c) Ultralytics. See LICENSE and THIRD_PARTY_NOTICES.md.
-"""Axis-aligned box geometry and suppression used by both detection heads."""
+"""两路检测共用的轴对齐边界框几何计算与非极大值抑制。"""
 from __future__ import annotations
 
 import math
@@ -9,59 +9,55 @@ import torch
 
 
 def empty_like(x):
-    """Create empty torch.Tensor or np.ndarray with same shape and dtype as input."""
+    """创建与输入形状、dtype 相同的未初始化 Tensor 或 NumPy 数组。"""
     return torch.empty_like(x, dtype=x.dtype) if isinstance(x, torch.Tensor) else np.empty_like(x, dtype=x.dtype)
 
 
 def xywh2xyxy(x):
-    """Convert bounding box coordinates from (x, y, width, height) format to (x1, y1, x2, y2) format where (x1, y1) is
-    the top-left corner and (x2, y2) is the bottom-right corner. Note: ops per 2 channels faster than per channel.
+    """将中心点、宽、高 (x,y,w,h) 转为左上角、右下角 (x1,y1,x2,y2)。
 
-    Args:
-        x (np.ndarray | torch.Tensor): Input bounding box coordinates in (x, y, width, height) format.
-
-    Returns:
-        (np.ndarray | torch.Tensor): Bounding box coordinates in (x1, y1, x2, y2) format.
+    输入为最后一维长度为 4 的 Tensor 或 NumPy 数组，返回同形状、同 dtype
+    的新对象，不改变输入。
     """
     assert x.shape[-1] == 4, f"input shape last dimension expected 4 but input shape is {x.shape}"
-    y = empty_like(x)  # faster than clone/copy
-    xy = x[..., :2]  # centers
-    wh = x[..., 2:] / 2  # half width-height
-    y[..., :2] = xy - wh  # top left xy
-    y[..., 2:] = xy + wh  # bottom right xy
+    y = empty_like(x)  # 四个坐标均在下方赋值，无需复制原数据。
+    xy = x[..., :2]  # 中心坐标
+    wh = x[..., 2:] / 2  # 半宽、半高
+    y[..., :2] = xy - wh  # 左上角
+    y[..., 2:] = xy + wh  # 右下角
     return y
 
 
 def xyxy2xywh(x):
-    """Convert bounding box coordinates from (x1, y1, x2, y2) format to (x, y, width, height) format where (x1, y1) is
-    the top-left corner and (x2, y2) is the bottom-right corner.
+    """将左上角、右下角 (x1,y1,x2,y2) 转为中心点、宽、高 (x,y,w,h)。
 
-    Args:
-        x (np.ndarray | torch.Tensor): Input bounding box coordinates in (x1, y1, x2, y2) format.
-
-    Returns:
-        (np.ndarray | torch.Tensor): Bounding box coordinates in (x, y, width, height) format.
+    输入为最后一维长度为 4 的 Tensor 或 NumPy 数组，返回同形状、同 dtype
+    的新对象，不改变输入。
     """
     assert x.shape[-1] == 4, f"input shape last dimension expected 4 but input shape is {x.shape}"
-    y = empty_like(x)  # faster than clone/copy
+    y = empty_like(x)  # 为输出坐标分配新空间。
     x1, y1, x2, y2 = x[..., 0], x[..., 1], x[..., 2], x[..., 3]
-    y[..., 0] = (x1 + x2) / 2  # x center
-    y[..., 1] = (y1 + y2) / 2  # y center
-    y[..., 2] = x2 - x1  # width
-    y[..., 3] = y2 - y1  # height
+    y[..., 0] = (x1 + x2) / 2  # 中心 x
+    y[..., 1] = (y1 + y2) / 2  # 中心 y
+    y[..., 2] = x2 - x1  # 宽
+    y[..., 3] = y2 - y1  # 高
     return y
 
 
 def make_anchors(feats, strides, grid_cell_offset=0.5):
-    """Generate anchors from features."""
+    """按各特征层尺寸生成网格点 [A,2] 及对应步长 [A,1]。
+
+    当前检测头传入各层 BCHW 特征列表；网格坐标以特征格为单位，默认偏移
+    0.5，表示格点中心。乘对应步长后才转换为输入图像像素坐标。
+    """
     anchor_points, stride_tensor = [], []
     assert feats is not None
     dtype, device = feats[0].dtype, feats[0].device
-    for i in range(len(feats)):  # use len(feats) to avoid TracerWarning from iterating over strides tensor
+    for i in range(len(feats)):  # 用层索引读取步长，不直接遍历步长张量。
         stride = strides[i]
         h, w = feats[i].shape[2:] if isinstance(feats, list) else (int(feats[i][0]), int(feats[i][1]))
-        sx = torch.arange(end=w, device=device, dtype=dtype) + grid_cell_offset  # shift x
-        sy = torch.arange(end=h, device=device, dtype=dtype) + grid_cell_offset  # shift y
+        sx = torch.arange(end=w, device=device, dtype=dtype) + grid_cell_offset  # x 方向格内偏移
+        sy = torch.arange(end=h, device=device, dtype=dtype) + grid_cell_offset  # y 方向格内偏移
         sy, sx = torch.meshgrid(sy, sx, indexing="ij")
         anchor_points.append(torch.stack((sx, sy), -1).view(-1, 2))
         stride_tensor.append(torch.full((h * w, 1), stride, dtype=dtype, device=device))
@@ -69,46 +65,37 @@ def make_anchors(feats, strides, grid_cell_offset=0.5):
 
 
 def dist2bbox(distance, anchor_points, xywh=True, dim=-1):
-    """Transform distance(ltrb) to box(xywh or xyxy)."""
+    """将网格点到左、上、右、下边界的距离转换为 xywh 或 xyxy 框。"""
     lt, rb = distance.chunk(2, dim)
     x1y1 = anchor_points - lt
     x2y2 = anchor_points + rb
     if xywh:
         c_xy = (x1y1 + x2y2) / 2
         wh = x2y2 - x1y1
-        return torch.cat([c_xy, wh], dim)  # xywh bbox
+        return torch.cat([c_xy, wh], dim)  # 中心点、宽、高
     return torch.cat((x1y1, x2y2), dim)
 
 
 def bbox2dist(anchor_points: torch.Tensor, bbox: torch.Tensor, reg_max: int | None = None) -> torch.Tensor:
-    """Transform bbox(xyxy) to dist(ltrb)."""
+    """由 xyxy 框求网格点到四边的距离；指定 reg_max 时截断到分箱范围。"""
     x1y1, x2y2 = bbox.chunk(2, -1)
     dist = torch.cat((anchor_points - x1y1, x2y2 - anchor_points), -1)
     if reg_max is not None:
-        dist = dist.clamp_(0, reg_max - 0.01)  # dist (lt, rb)
+        dist = dist.clamp_(0, reg_max - 0.01)  # 左、上、右、下距离
     return dist
 
 
 def box_iou(box1: torch.Tensor, box2: torch.Tensor, eps: float = 1e-7) -> torch.Tensor:
-    """Calculate intersection-over-union (IoU) of boxes.
+    """计算两组 xyxy 框的两两 IoU，输入 [N,4]、[M,4]，输出 [N,M]。
 
-    Args:
-        box1 (torch.Tensor): A tensor of shape (N, 4) representing N bounding boxes in (x1, y1, x2, y2) format.
-        box2 (torch.Tensor): A tensor of shape (M, 4) representing M bounding boxes in (x1, y1, x2, y2) format.
-        eps (float, optional): A small value to avoid division by zero.
-
-    Returns:
-        (torch.Tensor): An NxM tensor containing the pairwise IoU values for every element in box1 and box2.
-
-    References:
+    eps 用于避免除零；计算前转为 float32。参考实现：
         https://github.com/pytorch/vision/blob/main/torchvision/ops/boxes.py
     """
-    # NOTE: Need .float() to get accurate iou values
-    # inter(N,M) = (rb(N,M,2) - lt(N,M,2)).clamp(0).prod(2)
+    # 用 float32 计算交集与并集，避免低精度坐标运算带来的额外误差。
     (a1, a2), (b1, b2) = box1.float().unsqueeze(1).chunk(2, 2), box2.float().unsqueeze(0).chunk(2, 2)
     inter = (torch.min(a2, b2) - torch.max(a1, b1)).clamp_(0).prod(2)
 
-    # IoU = inter / (area1 + area2 - inter)
+    # IoU = 交集面积 / (面积1 + 面积2 - 交集面积)。
     return inter / ((a2 - a1).prod(2) + (b2 - b1).prod(2) - inter + eps)
 
 
@@ -121,94 +108,72 @@ def bbox_iou(
     CIoU: bool = False,
     eps: float = 1e-7,
 ) -> torch.Tensor:
-    """Calculate the Intersection over Union (IoU) between bounding boxes.
+    """计算可广播形状的边界框 IoU 或其 GIoU、DIoU、CIoU 变体。
 
-    This function supports various shapes for `box1` and `box2` as long as the last dimension is 4. For instance, you
-    may pass tensors shaped like (4,), (N, 4), (B, N, 4), or (B, N, 1, 4). Internally, the code will split the last
-    dimension into (x, y, w, h) if `xywh=True`, or (x1, y1, x2, y2) if `xywh=False`.
-
-    Args:
-        box1 (torch.Tensor): A tensor representing one or more bounding boxes, with the last dimension being 4.
-        box2 (torch.Tensor): A tensor representing one or more bounding boxes, with the last dimension being 4.
-        xywh (bool, optional): If True, input boxes are in (x, y, w, h) format. If False, input boxes are in (x1, y1,
-            x2, y2) format.
-        GIoU (bool, optional): If True, calculate Generalized IoU.
-        DIoU (bool, optional): If True, calculate Distance IoU.
-        CIoU (bool, optional): If True, calculate Complete IoU.
-        eps (float, optional): A small value to avoid division by zero.
-
-    Returns:
-        (torch.Tensor): IoU, GIoU, DIoU, or CIoU values depending on the specified flags.
+    两个输入最后一维均为 4，其余维度须能广播。xywh=True 时输入为中心点、
+    宽、高，否则为左上角、右下角。变体标记同时启用时优先 CIoU，再 DIoU，
+    最后 GIoU；均关闭则返回普通 IoU。输出保留长度为 1 的末维。
+    当前目标分配与框损失使用 xywh=False、CIoU=True。
     """
-    # Get the coordinates of bounding boxes
-    if xywh:  # transform from xywh to xyxy
+    # 统一得到边界框的角点坐标。
+    if xywh:  # 从中心点、宽、高转换为角点
         (x1, y1, w1, h1), (x2, y2, w2, h2) = box1.chunk(4, -1), box2.chunk(4, -1)
         w1_, h1_, w2_, h2_ = w1 / 2, h1 / 2, w2 / 2, h2 / 2
         b1_x1, b1_x2, b1_y1, b1_y2 = x1 - w1_, x1 + w1_, y1 - h1_, y1 + h1_
         b2_x1, b2_x2, b2_y1, b2_y2 = x2 - w2_, x2 + w2_, y2 - h2_, y2 + h2_
-    else:  # x1, y1, x2, y2 = box1
+    else:  # 输入已经是角点格式。
         b1_x1, b1_y1, b1_x2, b1_y2 = box1.chunk(4, -1)
         b2_x1, b2_y1, b2_x2, b2_y2 = box2.chunk(4, -1)
         w1, h1 = b1_x2 - b1_x1, b1_y2 - b1_y1 + eps
         w2, h2 = b2_x2 - b2_x1, b2_y2 - b2_y1 + eps
 
-    # Intersection area
+    # 交集面积。
     inter = (b1_x2.minimum(b2_x2) - b1_x1.maximum(b2_x1)).clamp_(0) * (
         b1_y2.minimum(b2_y2) - b1_y1.maximum(b2_y1)
     ).clamp_(0)
 
-    # Union Area
+    # 并集面积。
     union = w1 * h1 + w2 * h2 - inter + eps
 
-    # IoU
+    # 普通 IoU，以及可选的几何惩罚项。
     iou = inter / union
     if CIoU or DIoU or GIoU:
-        cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)  # convex (smallest enclosing box) width
-        ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)  # convex height
-        if CIoU or DIoU:  # Distance or Complete IoU https://arxiv.org/abs/1911.08287v1
-            c2 = cw.pow(2) + ch.pow(2) + eps  # convex diagonal squared
+        cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)  # 最小外接框宽度
+        ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)  # 最小外接框高度
+        if CIoU or DIoU:  # 距离或完整 IoU，参考 https://arxiv.org/abs/1911.08287v1
+            c2 = cw.pow(2) + ch.pow(2) + eps  # 外接框对角线长度平方
             rho2 = (
                 (b2_x1 + b2_x2 - b1_x1 - b1_x2).pow(2) + (b2_y1 + b2_y2 - b1_y1 - b1_y2).pow(2)
-            ) / 4  # center dist**2
+            ) / 4  # 两框中心距离的平方
             if CIoU:  # https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
                 v = (4 / math.pi**2) * ((w2 / h2).atan() - (w1 / h1).atan()).pow(2)
                 with torch.no_grad():
                     alpha = v / (v - iou + (1 + eps))
                 return iou - (rho2 / c2 + v * alpha)  # CIoU
             return iou - rho2 / c2  # DIoU
-        c_area = cw * ch + eps  # convex area
+        c_area = cw * ch + eps  # 最小外接框面积
         return iou - (c_area - union) / c_area  # GIoU https://arxiv.org/pdf/1902.09630.pdf
     return iou
 
 
 def torch_nms(boxes: torch.Tensor, scores: torch.Tensor, iou_threshold: float) -> torch.Tensor:
-    """Optimized NMS with early termination that matches torchvision behavior exactly.
+    """按分数降序执行贪心 IoU 抑制，返回保留框在原输入中的索引。
 
-    Args:
-        boxes (torch.Tensor): Bounding boxes with shape (N, 4) in xyxy format.
-        scores (torch.Tensor): Confidence scores with shape (N,).
-        iou_threshold (float): IoU threshold for suppression.
-
-    Returns:
-        (torch.Tensor): Indices of boxes to keep after NMS.
-
-    Examples:
-        Apply NMS to a set of boxes
-        >>> boxes = torch.tensor([[0, 0, 10, 10], [5, 5, 15, 15]])
-        >>> scores = torch.tensor([0.9, 0.8])
-        >>> keep = TorchNMS.nms(boxes, scores, 0.5)
+    boxes 为 [N,4] 的 xyxy 框，scores 为 [N] 分数；与当前保留框 IoU 大于
+    iou_threshold 的剩余框被移除。不在此区分类别，也不承诺并列分数的
+    排序在不同设备上完全一致。
     """
     if boxes.numel() == 0:
         return torch.empty((0,), dtype=torch.int64, device=boxes.device)
 
-    # Pre-allocate and extract coordinates once
+    # 提取角点并预先计算每个框的面积。
     x1, y1, x2, y2 = boxes.unbind(1)
     areas = (x2 - x1) * (y2 - y1)
 
-    # Sort by scores descending
+    # 按分数降序排列。
     order = scores.argsort(0, descending=True)
 
-    # Pre-allocate keep list with maximum possible size
+    # 按候选总数预分配保留索引空间。
     keep = torch.zeros(order.numel(), dtype=torch.int64, device=boxes.device)
     keep_idx = 0
     while order.numel() > 0:
@@ -218,24 +183,24 @@ def torch_nms(boxes: torch.Tensor, scores: torch.Tensor, iou_threshold: float) -
 
         if order.numel() == 1:
             break
-        # Vectorized IoU calculation for remaining boxes
+        # 向量化计算当前框与剩余框的相交区域。
         rest = order[1:]
         xx1 = torch.maximum(x1[i], x1[rest])
         yy1 = torch.maximum(y1[i], y1[rest])
         xx2 = torch.minimum(x2[i], x2[rest])
         yy2 = torch.minimum(y2[i], y2[rest])
 
-        # Fast intersection and IoU
+        # 计算交集面积。
         w = (xx2 - xx1).clamp_(min=0)
         h = (yy2 - yy1).clamp_(min=0)
         inter = w * h
-        # Early exit: skip IoU calculation if no intersection
+        # 当前框与其余框完全不相交时，跳过这一轮的 IoU 计算。
         if inter.sum() == 0:
-            # No overlaps with current box, keep all remaining boxes
+            # 剩余框仍须在后续迭代中相互比较，而非直接全部作为最终结果。
             order = rest
             continue
         iou = inter / (areas[i] + areas[rest] - inter)
-        # Keep boxes with IoU <= threshold
+        # 仅保留与当前框 IoU 不超过阈值的候选。
         order = rest[iou <= iou_threshold]
 
     return keep[:keep_idx]
@@ -252,11 +217,14 @@ def non_max_suppression(
     max_nms=30000,
     max_wh=7680,
 ):
-    """Source detector's axis-aligned NMS path, without a batch time cutoff.
+    """对已解码的轴对齐检测结果做置信度过滤与 NMS，不设置批次耗时截断。
 
-    Input: decoded ``(batch, 4 + nc, anchors)`` xywh/class probabilities.
-    Output: one ``(detections, 6)`` xyxy/confidence/class tensor per image.
-    Every image is processed, including on slower CPU-only installations.
+    输入为 [batch,4+nc,anchors]，前四通道为 xywh，后续为类别概率；也接受
+    以该张量为首项的元组或列表。返回逐图像 [检测数,6] 张量，列为
+    x1、y1、x2、y2、置信度、类别 ID；无检测时保留 [0,6] 空张量。
+    multi_label=False 时每个候选仅取最高分类分数，否则可保留多个类别。
+    默认按类别偏移框坐标后执行 NMS；agnostic=True 时不区分类别。
+    max_nms 限制进入 NMS 的候选数，max_det 限制每张图像的最终框数。
     """
     if not 0 <= conf_thres <= 1 or not 0 <= iou_thres <= 1:
         raise ValueError("Confidence and IoU thresholds must lie within [0, 1].")
@@ -266,8 +234,7 @@ def non_max_suppression(
     if prediction.ndim != 3 or prediction.shape[1] != 4 + nc:
         raise ValueError("Expected decoded prediction of shape (batch, 4 + nc, anchors).")
     candidates = prediction[:, 4:4 + nc].amax(1) > conf_thres
-    # Keep the caller's decoded tensor intact; the original implementation used
-    # a view here and replaced its xywh coordinates in place.
+    # 复制后再转换坐标，避免修改调用方的已解码张量。
     prediction = prediction.transpose(-1, -2).clone()
     prediction[..., :4] = xywh2xyxy(prediction[..., :4])
     output = []

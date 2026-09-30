@@ -1,3 +1,3 @@
-"""MROSDet: modality-robust optical-sonar object detection."""
+"""MROSDet：面向传感器退化的光学—声纳双模态目标检测。"""
 
 __version__ = "0.1.0"

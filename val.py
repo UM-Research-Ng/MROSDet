@@ -1,4 +1,4 @@
-"""Evaluate both MROSDet branches on a paired dataset split."""
+"""在指定数据划分上分别评估 MROSDet 的光学与声纳检测分支。"""
 
 import argparse
 import logging

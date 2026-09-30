@@ -1,9 +1,5 @@
 cff-version: 1.2.0
-message: >-
-  Please cite this software when using the implementation. The related manuscript
-  is MROSDet: A Modality-Robust Optical-Sonar Fusion Paradigm for Underwater
-  Perception under Sensor Degradation. Its accepted-paper link will be added
-  after acceptance.
+message: Please cite this software when using MROSDet in your research.
 type: software
 title: MROSDet
 version: 0.1.0

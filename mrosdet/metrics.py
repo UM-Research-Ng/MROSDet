@@ -1,6 +1,6 @@
 # Derived from Ultralytics (AGPL-3.0), https://github.com/ultralytics/ultralytics.
 # Copyright (c) Ultralytics. See LICENSE and THIRD_PARTY_NOTICES.md.
-"""Dual-modality detection evaluation using the original AP and matching rules."""
+"""按来源实现的匹配与 AP 规则，分别评估 RGB 和 Sonar 检测结果。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,41 +11,34 @@ from .box_ops import box_iou, non_max_suppression, xywh2xyxy
 
 
 def smooth(y: np.ndarray, f: float = 0.05) -> np.ndarray:
-    """Box filter of fraction f."""
-    nf = round(len(y) * f * 2) // 2 + 1  # number of filter elements (must be odd)
-    p = np.ones(nf // 2)  # ones padding
-    yp = np.concatenate((p * y[0], y, p * y[-1]), 0)  # y padded
+    """按序列长度比例 f 构造奇数宽度均值滤波器，边界用端点值填充。"""
+    nf = round(len(y) * f * 2) // 2 + 1  # 滤波窗口宽度须为奇数
+    p = np.ones(nf // 2)  # 两端填充所需的单位向量
+    yp = np.concatenate((p * y[0], y, p * y[-1]), 0)  # 复制端点值填充
     return np.convolve(yp, np.ones(nf) / nf, mode="valid")
 
 
 def compute_ap(recall: list[float], precision: list[float]) -> tuple[float, np.ndarray, np.ndarray]:
-    """Compute the average precision (AP) given the recall and precision curves.
+    """由召回率和精确率曲线计算 AP，并返回精确率包络及补齐后的召回率。
 
-    Args:
-        recall (list[float]): The recall curve.
-        precision (list[float]): The precision curve.
-
-    Returns:
-        ap (float): Average precision.
-        mpre (np.ndarray): Precision envelope curve.
-        mrec (np.ndarray): Modified recall curve with sentinel values added at the beginning and end.
+    保留来源实现的端点补齐规则，在 0 到 1 的 101 个点上插值并做梯形积分。
     """
-    # Append sentinel values to beginning and end
+    # 补齐端点，并在末端保留最后一个实际召回率位置。
     mrec = np.concatenate(([0.0], recall, [recall[-1] if len(recall) else 1.0], [1.0]))
     mpre = np.concatenate(([1.0], precision, [0.0], [0.0]))
 
-    # Compute the precision envelope
+    # 从右向左取累计最大值，构造单调精确率包络。
     mpre = np.flip(np.maximum.accumulate(np.flip(mpre)))
 
-    # Integrate area under curve
-    method = "interp"  # methods: 'continuous', 'interp'
+    # 当前使用插值积分；保留来源中的连续积分分支。
+    method = "interp"  # 当前固定为 interp，另一分支为 continuous
     if method == "interp":
-        x = np.linspace(0, 1, 101)  # 101-point interp (COCO)
-        func = np.trapezoid if hasattr(np, "trapezoid") else np.trapz  # np.trapz deprecated
-        ap = func(np.interp(x, mrec, mpre), x)  # integrate
-    else:  # 'continuous'
-        i = np.where(mrec[1:] != mrec[:-1])[0]  # points where x-axis (recall) changes
-        ap = np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])  # area under curve
+        x = np.linspace(0, 1, 101)  # 101 点插值的 AP 计算约定
+        func = np.trapezoid if hasattr(np, "trapezoid") else np.trapz  # 兼容不同 NumPy 版本
+        ap = func(np.interp(x, mrec, mpre), x)  # 梯形积分
+    else:  # 连续积分分支
+        i = np.where(mrec[1:] != mrec[:-1])[0]  # 召回率变化的位置
+        ap = np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])  # 曲线下面积
 
     return ap, mpre, mrec
 
@@ -62,92 +55,79 @@ def ap_per_class(
     eps: float = 1e-16,
     prefix: str = "",
 ) -> tuple:
-    """Compute the average precision per class for object detection evaluation.
+    """计算存在真实目标的各类别 AP，以及统一置信度阈值处的 P/R/F1。
 
-    Args:
-        tp (np.ndarray): Binary array indicating whether the detection is correct (True) or not (False).
-        conf (np.ndarray): Array of confidence scores of the detections.
-        pred_cls (np.ndarray): Array of predicted classes of the detections.
-        target_cls (np.ndarray): Array of true classes of the targets.
-        plot (bool, optional): Whether to plot PR curves or not.
-        on_plot (callable, optional): A callback to pass plots path and data when they are rendered.
-        save_dir (Path, optional): Directory to save the PR curves.
-        names (dict[int, str], optional): Dictionary of class names to plot PR curves.
-        eps (float, optional): A small value to avoid division by zero.
-        prefix (str, optional): A prefix string for saving the plot files.
+    tp 为 [检测数, IoU 阈值数] 匹配布尔数组；conf、pred_cls 为检测的置信度
+    和类别，target_cls 为全部真实目标的类别。P/R/F1 使用第一个 IoU 阈值，
+    在平滑后的类别平均 F1 最大位置取统一置信度阈值。
 
-    Returns:
-        tp (np.ndarray): True positive counts at threshold given by max F1 metric for each class.
-        fp (np.ndarray): False positive counts at threshold given by max F1 metric for each class.
-        p (np.ndarray): Precision values at threshold given by max F1 metric for each class.
-        r (np.ndarray): Recall values at threshold given by max F1 metric for each class.
-        f1 (np.ndarray): F1-score values at threshold given by max F1 metric for each class.
-        ap (np.ndarray): Average precision for each class at different IoU thresholds.
-        unique_classes (np.ndarray): An array of unique classes that have data.
-        p_curve (np.ndarray): Precision curves for each class.
-        r_curve (np.ndarray): Recall curves for each class.
-        f1_curve (np.ndarray): F1-score curves for each class.
-        x (np.ndarray): X-axis values for the curves.
-        prec_values (np.ndarray): Precision values at mAP@0.5 for each class.
+    返回顺序：tp、fp、p、r、f1、ap、unique_classes、p_curve、r_curve、
+    f1_curve、x、prec_values。前五项为选定阈值处的逐类别结果，ap 为
+    [真实类别数, IoU 阈值数]；曲线横轴 x 是 1000 个置信度采样点。
+    prec_values 则是在相同 0 到 1 网格上的第一 IoU 阈值精确率包络，
+    仅包含同时有真实目标和预测的类别；无可用曲线时返回一行零值。
+
+    此精简接口不提供绘图，plot 必须为 False。on_plot、save_dir、names、
+    prefix 仅保留兼容签名，不会生成文件或调用绘图回调。
     """
-    # Sort by objectness
+    # 按最终检测置信度降序排列；此处没有单独的 objectness 分数。
     i = np.argsort(-conf)
     tp, conf, pred_cls = tp[i], conf[i], pred_cls[i]
 
-    # Find unique classes
+    # 只统计真实标签中出现的类别。
     unique_classes, nt = np.unique(target_cls, return_counts=True)
-    nc = unique_classes.shape[0]  # number of classes, number of detections
+    nc = unique_classes.shape[0]  # 有真实目标的类别数
 
-    # Create Precision-Recall curve and compute AP for each class
+    # 构造逐类别精确率、召回率曲线及 AP。
     x, prec_values = np.linspace(0, 1, 1000), []
 
-    # Average precision, precision and recall curves
+    # AP 按各 IoU 阈值保存，P/R 曲线各含 1000 个置信度采样点。
     ap, p_curve, r_curve = np.zeros((nc, tp.shape[1])), np.zeros((nc, 1000)), np.zeros((nc, 1000))
     for ci, c in enumerate(unique_classes):
         i = pred_cls == c
-        n_l = nt[ci]  # number of labels
-        n_p = i.sum()  # number of predictions
+        n_l = nt[ci]  # 当前类别的真实目标数
+        n_p = i.sum()  # 当前类别的预测数
         if n_p == 0 or n_l == 0:
             continue
 
-        # Accumulate FPs and TPs
+        # 按置信度排序累计假阳性和真阳性。
         fpc = (1 - tp[i]).cumsum(0)
         tpc = tp[i].cumsum(0)
 
-        # Recall
-        recall = tpc / (n_l + eps)  # recall curve
-        r_curve[ci] = np.interp(-x, -conf[i], recall[:, 0], left=0)  # negative x, xp because xp decreases
+        # 第一 IoU 阈值对应的召回率曲线。
+        recall = tpc / (n_l + eps)  # 各 IoU 阈值的累计召回率
+        r_curve[ci] = np.interp(-x, -conf[i], recall[:, 0], left=0)  # 取负使置信度自变量递增
 
-        # Precision
-        precision = tpc / (tpc + fpc)  # precision curve
-        p_curve[ci] = np.interp(-x, -conf[i], precision[:, 0], left=1)  # p at pr_score
+        # 第一 IoU 阈值对应的精确率曲线。
+        precision = tpc / (tpc + fpc)  # 各 IoU 阈值的累计精确率
+        p_curve[ci] = np.interp(-x, -conf[i], precision[:, 0], left=1)  # 各置信度采样点的精确率
 
-        # AP from recall-precision curve
+        # 对每个 IoU 阈值的召回率—精确率曲线分别积分。
         for j in range(tp.shape[1]):
             ap[ci, j], mpre, mrec = compute_ap(recall[:, j], precision[:, j])
             if j == 0:
-                prec_values.append(np.interp(x, mrec, mpre))  # precision at mAP@0.5
+                prec_values.append(np.interp(x, mrec, mpre))  # 第一 IoU 阈值的精确率包络
 
-    prec_values = np.array(prec_values) if prec_values else np.zeros((1, 1000))  # (nc, 1000)
+    prec_values = np.array(prec_values) if prec_values else np.zeros((1, 1000))  # 每条有效包络含 1000 个点
 
-    # Compute F1 (harmonic mean of precision and recall)
+    # 计算精确率与召回率的调和平均 F1。
     f1_curve = 2 * p_curve * r_curve / (p_curve + r_curve + eps)
-    names = {i: names[k] for i, k in enumerate(unique_classes) if k in names}  # dict: only classes that have data
+    names = {i: names[k] for i, k in enumerate(unique_classes) if k in names}  # 仅保留存在真实目标的类别名
     if plot:
         raise ValueError("Plotting is not part of the compact evaluation API.")
 
-    i = smooth(f1_curve.mean(0), 0.1).argmax()  # max F1 index
-    p, r, f1 = p_curve[:, i], r_curve[:, i], f1_curve[:, i]  # max-F1 precision, recall, F1 values
-    tp = (r * nt).round()  # true positives
-    fp = (tp / (p + eps) - tp).round()  # false positives
+    i = smooth(f1_curve.mean(0), 0.1).argmax()  # 平滑后的类别平均 F1 最大位置
+    p, r, f1 = p_curve[:, i], r_curve[:, i], f1_curve[:, i]  # 同一置信度阈值下的逐类别结果
+    tp = (r * nt).round()  # 由召回率换算真阳性数
+    fp = (tp / (p + eps) - tp).round()  # 由精确率换算假阳性数
     return tp, fp, p, r, f1, ap, unique_classes.astype(int), p_curve, r_curve, f1_curve, x, prec_values
 
 
 def postprocess(preds, nc, conf=0.25, iou=0.7, max_det=300, multi_label=False):
-    """Decode each branch's evaluation output into xyxy/confidence/class boxes.
+    """对两路已解码预测分别执行 NMS，返回逐图像的 xyxy/置信度/类别张量。
 
-    Prediction keeps the best class per anchor. Evaluation explicitly enables
-    multi-label NMS, matching the two distinct paths in the source project.
+    预测默认仅保留每个候选点最高分的类别；evaluate 显式启用 multi_label，
+    使同一候选点中所有超过置信度阈值的类别均可进入按类别执行的 NMS。
     """
     return {
         branch: non_max_suppression(
@@ -159,7 +139,11 @@ def postprocess(preds, nc, conf=0.25, iou=0.7, max_det=300, multi_label=False):
 
 
 def match_predictions(pred_classes, true_classes, iou, thresholds=None):
-    """Original greedy class-aware one-to-one matching at ten IoU thresholds."""
+    """按类别和 IoU 建立一对一匹配，保留来源实现的排序、去重次序。
+
+    默认分别使用 0.50 到 0.95 的十个 IoU 阈值；返回 [检测数, 阈值数]
+    布尔数组。同一阈值下，每个预测和真实目标最多参与一次匹配。
+    """
     if thresholds is None:
         thresholds = torch.linspace(0.5, 0.95, 10, device=pred_classes.device)
     correct = np.zeros((pred_classes.shape[0], thresholds.shape[0])).astype(bool)
@@ -177,7 +161,10 @@ def match_predictions(pred_classes, true_classes, iou, thresholds=None):
 
 
 def summarize_stats(stats, names, images):
-    """Aggregate per-image arrays without changing the source AP averaging."""
+    """合并逐图像统计，只对有真实目标的类别计算 P/R/AP 均值。
+
+    没有任何真实目标时返回零指标及空类别列表；有目标但无预测的类别记零。
+    """
     merged = {key: np.concatenate(values, axis=0) for key, values in stats.items()}
     target = merged["target_cls"]
     if not len(target):
@@ -200,10 +187,12 @@ def summarize_stats(stats, names, images):
 
 @torch.inference_mode()
 def evaluate(model, dataloader, device, conf=0.001, iou=0.7, max_det=300):
-    """Evaluate independent RGB/Sonar labels in the square-resized image space.
+    """在方形缩放后的坐标空间中，分别用 RGB/Sonar 自己的标签评估。
 
-    Dataset images must be uint8 CHW batches. The mean of both branches'
-    mAP50-95 values is the checkpoint-selection fitness, as in the source.
+    数据加载器提供 uint8 BCHW 图像批次；本函数转为模型 dtype 并除以 255。
+    归一化标签框换算到各路当前输入尺寸，使用多标签 NMS 和十个 IoU 阈值。
+    两路 mAP50_95 的算术平均作为选择权重的 fitness；结束时恢复模型原有的
+    训练/验证模式。此函数只返回统计，不绘图或写入评估文件。
     """
     device = torch.device(device)
     previous_training = model.training

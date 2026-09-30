@@ -1,4 +1,4 @@
-"""Portable, weights-only checkpoints for MROSDet."""
+"""MROSDet 权重读写：保存模型参数、配置及推理所需的附加状态。"""
 
 from copy import deepcopy
 from pathlib import Path
@@ -9,13 +9,13 @@ FORMAT_VERSION = 1
 
 
 def model_config(config):
-    """Keep only portable architecture fields, never machine-specific paths."""
+    """仅保留构建网络所需的配置字段，不保存机器路径。"""
     allowed = {"nc", "task", "scale", "scales", "end2end", "reg_max", "modalities", "backbone", "head", "channels", "depth_multiple", "width_multiple"}
     return {k: deepcopy(v) for k, v in config.items() if k in allowed}
 
 
 def extra_buffers(model):
-    """Nonpersistent fusion priors must survive export despite not being state_dict entries."""
+    """单独保存未进入 state_dict 的融合尺度先验，避免加载后丢失。"""
     result = {}
     for prefix, module in model.named_modules():
         for key in sorted(module._non_persistent_buffers_set):
@@ -26,6 +26,7 @@ def extra_buffers(model):
 
 
 def restore_buffers(model, buffers):
+    """核对附加缓冲区的名称与形状，再恢复到模型对应设备。"""
     expected = extra_buffers(model)
     if expected.keys() != buffers.keys():
         raise ValueError(f"Checkpoint nonpersistent buffers differ: missing={expected.keys() - buffers.keys()}, extra={buffers.keys() - expected.keys()}")
@@ -39,7 +40,7 @@ def restore_buffers(model, buffers):
 
 
 def save_checkpoint(model, path, config, names, *, source_sha256=None):
-    """Export only plain configuration and tensors; no Python model pickle or training history."""
+    """保存普通配置与张量，不序列化模型对象或优化器状态。"""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     if isinstance(names, list):
@@ -63,6 +64,7 @@ def save_checkpoint(model, path, config, names, *, source_sha256=None):
 
 
 def load_model(weights, device="cpu"):
+    """通过 weights_only=True 加载权重，严格检查参数、类别和预处理配置。"""
     from mrosdet.nn.model import MROSDet
 
     weights = Path(weights)
